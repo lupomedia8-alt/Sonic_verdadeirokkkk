@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sonic Retro — Green Hill Zone</title>
+
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #101b35;
+    color: white;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: 17px;
+    margin: 0 0 10px;
+    letter-spacing: 2px;
+    color: #ffe94a;
+  }
+
+  #game-shell {
+    width: min(96vw, 960px);
+    border: 4px solid #253c72;
+    box-shadow: 0 0 0 4px #0a1023, 0 0 35px #0879d6;
+    background: #70c5ff;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  .help {
+    margin-top: 14px;
+    max-width: 94vw;
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.8;
+    color: #d3e4ff;
+  }
+
+  .help strong { color: #ffe94a; }
+
+  #mobile-controls {
+    display: none;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  #mobile-controls button {
+    min-width: 58px;
+    height: 48px;
+    border: 2px solid #7298dc;
+    border-radius: 8px;
+    background: #203c70;
+    color: white;
+    font-size: 20px;
+    touch-action: none;
+  }
+
+  @media (pointer: coarse) {
+    #mobile-controls { display: flex; }
+    .help { margin-top: 8px; }
+  }
+</style>
+</head>
+
+<body>
+
+<h1>SONIC THE HEDGEHOG — RETRO ZONE</h1>
+
+<div id="game-shell">
+  <canvas id="game" width="320" height="180"
+          aria-label="Jogo de plataforma retrô"></canvas>
+</div>
+
+<div id="mobile-controls">
+  <button data-key="ArrowLeft">◀</button>
+  <button data-key="ArrowRight">▶</button>
+  <button data-key="Space">JUMP</button>
+  <button data-key="ArrowDown">▼</button>
+</div>
+
+<div class="help">
+  <strong>MOVER:</strong> ← → / A D &nbsp; · &nbsp;
+  <strong>PULAR:</strong> ESPAÇO / ↑ / W &nbsp; · &nbsp;
+  <strong>ABAIXAR:</strong> ↓ / S &nbsp; · &nbsp;
+  <strong>REINICIAR:</strong> R
+  <br>
+  Colete anéis, use a mola e alcance a placa no final da fase!
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // =========================================================
+  // 1. CONFIGURAÇÃO E CANVAS
+  // =========================================================
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // O mundo é maior que a tela; a câmera acompanha o jogador.
+  const WORLD_WIDTH = 3000;
+  const GRAVITY = 520;
+
+  const keys = Object.create(null);
+
+  let previousTime = 0;
+  let accumulator = 0;
+  const FIXED_DT = 1 / 120;
+
+  let elapsed = 0;
+  let score = 0;
+  let ringsCollected = 0;
+  let gameOver = false;
+  let won = false;
+
+  let cameraX = 0;
+  let particles = [];
+
+  // =========================================================
+  // 2. FASE: PLATAFORMAS, ANÉIS, MOLAS E CENÁRIO
+  // =========================================================
+
+  // Cada plataforma é um retângulo sólido.
+  const platforms = [
+    { x: 0,    y: 145, w: 410, h: 60 },
+    { x: 450,  y: 145, w: 300, h: 60 },
+    { x: 790,  y: 145, w: 400, h: 60 },
+    { x: 1230, y: 145, w: 390, h: 60 },
+    { x: 1660, y: 145, w: 370, h: 60 },
+    { x: 2070, y: 145, w: 430, h: 60 },
+    { x: 2540, y: 145, w: 460, h: 60 },
+
+    // Plataformas elevadas.
+    { x: 255,  y: 112, w: 72, h: 8 },
+    { x: 540,  y: 105, w: 92, h: 8 },
+    { x: 870,  y: 112, w: 90, h: 8 },
+    { x: 1050, y: 94,  w: 74, h: 8 },
+    { x: 1350, y: 108, w: 95, h: 8 },
+    { x: 1780, y: 103, w: 90, h: 8 },
+    { x: 2190, y: 110, w: 100, h: 8 },
+    { x: 2690, y: 104, w: 95, h: 8 }
+  ];
+
+  // Os anéis têm posição fixa no mundo.
+  let rings = [];
+
+  function createRings() {
+    rings = [];
+
+    const groups = [
+      [90, 112, 5],
+      [270, 87, 5],
+      [480, 115, 5],
+      [565, 80, 5],
+      [680, 112, 4],
+      [875, 88, 5],
+      [1060, 68, 5],
+      [1260, 112, 5],
+      [1375, 80, 5],
+      [1510, 112, 5],
+      [1720, 112, 5],
+      [1800, 75, 5],
+      [1940, 112, 5],
+      [2140, 112, 5],
+      [2210, 82, 5],
+      [2390, 112, 5],
+      [2600, 112, 5],
+      [2720, 76, 5],
+      [2860, 112, 5]
+    ];
+
+    for (const [x, y, count] of groups) {
+      for (let i = 0; i < count; i++) {
+        rings.push({
+          x: x + i * 13,
+          y: y - (count >= 5 ? Math.sin(i / (count - 1) * Math.PI) * 8 : 0),
+          taken: false,
+          phase: Math.random() * Math.PI * 2
+        });
+      }
+    }
+  }
+
+  const spring = { x: 1198, y: 132, w: 14, h: 13 };
+
+  const goal = {
+    x: 2900,
+    y: 91,
+    w: 18,
+    h: 54
+  };
+
+  // Palmeiras espalhadas pelo cenário.
+  const palms = [];
+
+  for (let x = 70; x < WORLD_WIDTH; x += 230) {
+    palms.push({
+      x: x + (Math.sin(x) * 40),
+      y: 145,
+      scale: 0.8 + ((x * 7) % 4) * 0.12
+    });
+  }
+
+  // =========================================================
+  // 3. PERSONAGEM
+  // =========================================================
+
+  const player = {
+    x: 35,
+    y: 110,
+    w: 14,
+    h: 20,
+    vx: 0,
+    vy: 0,
+    facing: 1,
+    grounded: false,
+    rolling: false,
+    anim: 0,
+    invulnerable: 0
+  };
+
+  function resetGame() {
+    player.x = 35;
+    player.y = 110;
+    player.vx = 0;
+    player.vy = 0;
+    player.facing = 1;
+    player.grounded = false;
+    player.rolling = false;
+    player.anim = 0;
+    player.invulnerable = 0;
+
+    elapsed = 0;
+    score = 0;
+    ringsCollected = 0;
+    gameOver = false;
+    won = false;
+    cameraX = 0;
+    particles = [];
+
+    createRings();
+  }
+
+  // =========================================================
+  // 4. CONTROLES
+  // =========================================================
+
+  const jumpKeys = ["Space", "ArrowUp", "KeyW"];
+
+  window.addEventListener("keydown", e => {
+    if (
+      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"]
+        .includes(e.code)
+    ) {
+      e.preventDefault();
+    }
+
+    if (e.code === "KeyR") {
+      resetGame();
+      return;
+    }
+
+    if (!keys[e.code]) {
+      keys[e.code] = true;
+
+      if (jumpKeys.includes(e.code)) {
+        player.jumpPressed = true;
+      }
+    }
+  });
+
+  window.addEventListener("keyup", e => {
+    keys[e.code] = false;
+
+    if (jumpKeys.includes(e.code)) {
+      player.jumpHeld = false;
+    }
+  });
+
+  // Botões de toque: funcionam também em dispositivos móveis.
+  document.querySelectorAll("#mobile-controls button")
+    .forEach(button => {
+      const code = button.dataset.key;
+
+      button.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        button.setPointerCapture(e.pointerId);
+
+        if (!keys[code]) {
+          keys[code] = true;
+
+          if (jumpKeys.includes(code)) {
+            player.jumpPressed = true;
+          }
+        }
+      });
+
+      const release = () => {
+        keys[code] = false;
+      };
+
+      button.addEventListener("pointerup", release);
+      button.addEventListener("pointercancel", release);
+      button.addEventListener("lostpointercapture", release);
+    });
+
+  // =========================================================
+  // 5. FÍSICA E COLISÕES
+  // =========================================================
+
+  function isDown(...codes) {
+    return codes.some(code => keys[code]);
+  }
+
+  function updatePlayer(dt) {
+    const left = isDown("ArrowLeft", "KeyA");
+    const right = isDown("ArrowRight", "KeyD");
+    const down = isDown("ArrowDown", "KeyS");
+
+    const accel = player.grounded ? 450 : 290;
+    const friction = player.grounded ? 420 : 55;
+    const maxSpeed = 145;
+
+    // Aceleração horizontal e inércia.
+    if (left && !right) {
+      player.vx -= accel * dt;
+      player.facing = -1;
+    } else if (right && !left) {
+      player.vx += accel * dt;
+      player.facing = 1;
+    } else {
+      if (Math.abs(player.vx) <= friction * dt) {
+        player.vx = 0;
+      } else {
+        player.vx -= Math.sign(player.vx) * friction * dt;
+      }
+    }
+
+    player.vx = Math.max(-maxSpeed, Math.min(maxSpeed, player.vx));
+
+    // Abaixar reduz a mobilidade, sem interromper a inércia.
+    player.rolling = down && player.grounded;
+
+    if (player.rolling) {
+      player.vx *= Math.pow(0.985, dt * 60);
+    }
+
+    // Pulo com altura variável.
+    if (player.jumpPressed && player.grounded) {
+      player.vy = -218;
+      player.grounded = false;
+      player.jumpHeld = true;
+    }
+
+    player.jumpPressed = false;
+
+    // Ao soltar o botão, o pulo fica mais curto.
+    let gravity = GRAVITY;
+
+    if (player.vy < 0 && !player.jumpHeld) {
+      gravity *= 2.05;
+    }
+
+    player.vy += gravity * dt;
+    player.vy = Math.min(player.vy, 320);
+
+    // Movimento horizontal.
+    const oldY = player.y;
+    player.x += player.vx * dt;
+
+    // Movimento vertical.
+    player.y += player.vy * dt;
+
+    // Colisão somente ao cair sobre uma plataforma.
+    player.grounded = false;
+
+    if (player.vy >= 0) {
+      for (const p of platforms) {
+        const horizontallyOverlapping =
+          player.x + player.w > p.x &&
+          player.x < p.x + p.w;
+
+        const crossedTop =
+          oldY + player.h <= p.y &&
+          player.y + player.h >= p.y;
+
+        if (horizontallyOverlapping && crossedTop) {
+          player.y = p.y - player.h;
+          player.vy = 0;
+          player.grounded = true;
+          break;
+        }
+      }
+    }
+
+    // Colisão por baixo das plataformas.
+    if (player.vy < 0) {
+      for (const p of platforms) {
+        const overlapX =
+          player.x + player.w > p.x &&
+          player.x < p.x + p.w;
+
+        const overlapY =
+          player.y < p.y + p.h &&
+          player.y + player.h > p.y;
+
+        if (overlapX && overlapY && oldY >= p.y + p.h) {
+          player.y = p.y + p.h;
+          player.vy = 0;
+        }
+      }
+    }
+
+    // Limites do mapa.
+    player.x = Math.max(0, Math.min(WORLD_WIDTH - player.w, player.x));
+
+    // A mola lança o personagem para o alto.
+    const springOverlap =
+      player.x + player.w > spring.x &&
+      player.x < spring.x + spring.w &&
+      player.y + player.h >= spring.y &&
+      player.y + player.h <= spring.y + spring.h + 7;
+
+    if (springOverlap && player.vy >= 0) {
+      player.y = spring.y - player.h;
+      player.vy = -340;
+      player.grounded = false;
+      player.jumpHeld = false;
+      burst(spring.x + spring.w / 2, spring.y, "#ffef57", 8);
+    }
+
+    // Caiu para fora da fase: reaparece no início.
+    if (player.y > H + 90) {
+      if (ringsCollected > 0) {
+        ringsCollected = Math.max(0, ringsCollected - 5);
+      }
+
+      player.x = Math.max(35, player.x - 180);
+      player.y = 60;
+      player.vx = 0;
+      player.vy = 0;
+    }
+
+    player.anim += Math.abs(player.vx) * dt * 0.12;
+
+    if (player.invulnerable > 0) {
+      player.invulnerable -= dt;
+    }
+  }
+
+  // =========================================================
+  // 6. COLETA DE ANÉIS E OBJETIVO
+  // =========================================================
+
+  function updateCollectibles() {
+    const px = player.x + player.w / 2;
+    const py = player.y + player.h / 2;
+
+    for (const ring of rings) {
+      if (ring.taken) continue;
+
+      const dx = px - ring.x;
+      const dy = py - ring.y;
+
+      if (dx * dx + dy * dy < 15 * 15) {
+        ring.taken = true;
+        ringsCollected++;
+        score += 100;
+
+        burst(ring.x, ring.y, "#ffe43b", 5);
+      }
+    }
+
+    if (
+      player.x + player.w >= goal.x &&
+      player.y + player.h > goal.y
+    ) {
+      won = true;
+    }
+  }
+
+  // =========================================================
+  // 7. PARTÍCULAS
+  // =========================================================
+
+  function burst(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 20 + Math.random() * 65;
+
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 0.35 + Math.random() * 0.3,
+        color
+      });
+    }
+  }
+
+  function updateParticles(dt) {
+    for (const p of particles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 100 * dt;
+      p.life -= dt;
+    }
+
+    particles = particles.filter(p => p.life > 0);
+  }
+
+  // =========================================================
+  // 8. FERRAMENTAS DE DESENHO PIXEL ART
+  // =========================================================
+
+  function rect(x, y, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(Math.round(x), Math.round(y), w, h);
+  }
+
+  function circle(x, y, r, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(Math.round(x), Math.round(y), r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function text(str, x, y, color = "#fff", size = 8) {
+    ctx.fillStyle = color;
+    ctx.font = `bold ${size}px monospace`;
+    ctx.textBaseline = "top";
+    ctx.fillText(str, x, y);
+  }
+
+  // =========================================================
+  // 9. CÉU E PARALLAX
+  // =========================================================
+
+  function drawBackground() {
+    // Céu azul clássico.
+    rect(0, 0, W, H, "#69c8ff");
+
+    // Nuvens que se movem mais lentamente que a câmera.
+    const cloudOffset = cameraX * 0.12;
+
+    for (let i = 0; i < 8; i++) {
+      let x = ((i * 57 - cloudOffset) % (W + 55) + W + 55) % (W + 55) - 25;
+      const y = 22 + (i % 3) * 13;
+
+      rect(x, y + 4, 25, 6, "#ffffff");
+      rect(x + 5, y, 14, 6, "#ffffff");
+      rect(x + 2, y + 10, 21, 3, "#dff5ff");
+    }
+
+    // Montanhas distantes em parallax.
+    const mountainOffset = cameraX * 0.22;
+
+    for (let i = -1; i < 8; i++) {
+      const x = i * 58 - (mountainOffset % 58);
+
+      rect(x + 10, 78, 32, 30, "#4abbd0");
+      rect(x + 17, 68, 20, 10, "#4abbd0");
+      rect(x + 23, 61, 8, 7, "#4abbd0");
+
+      rect(x + 17, 84, 6, 6, "#9be4d8");
+      rect(x + 30, 94, 6, 6, "#9be4d8");
+    }
+
+    // Colinas quadriculadas em outra camada de parallax.
+    const hillOffset = cameraX * 0.42;
+
+    for (let i = -1; i < 8; i++) {
+      const x = i * 54 - (hillOffset % 54);
+
+      rect(x, 109, 54, 36, "#15b95b");
+      rect(x + 5, 101, 42, 8, "#15b95b");
+      rect(x + 13, 95, 26, 6, "#15b95b");
+
+      rect(x + 6, 116, 8, 6, "#83e54c");
+      rect(x + 22, 109, 8, 6, "#83e54c");
+      rect(x + 38, 124, 8, 6, "#83e54c");
+
+      rect(x + 14, 130, 8, 6, "#087c42");
+      rect(x + 34, 115, 8, 6, "#087c42");
+    }
+  }
+
+  // =========================================================
+  // 10. CHÃO COM PADRÃO DE GRAMA E TERRA
+  // =========================================================
+
+  function drawPlatforms() {
+    for (const p of platforms) {
+      if (p.x + p.w < cameraX || p.x > cameraX + W) continue;
+
+      const x = p.x - cameraX;
+
+      // Base de terra.
+      rect(x, p.y, p.w, p.h, "#b85b24");
+      rect(x, p.y + 5, p.w, p.h - 5, "#9b4520");
+
+      // Faixa de grama.
+      rect(x, p.y, p.w, 4, "#19b947");
+      rect(x, p.y, p.w, 2, "#70e33f");
+
+      // Padrão quadriculado característico.
+      for (let tx = 0; tx < p.w; tx += 16) {
+        for (let ty = 0; ty < p.h - 5; ty += 12) {
+          const checker = ((tx / 16 + ty / 12) % 2) === 0;
+
+          rect(
+            x + tx,
+            p.y + 5 + ty,
+            Math.min(8, p.w - tx),
+            Math.min(6, p.h - 5 - ty),
+            checker ? "#d57932" : "#8c3d22"
+          );
+        }
+      }
+
+      // Pequenas pedras e pontos de luz.
+      for (let tx = 8; tx < p.w; tx += 32) {
+        rect(x + tx, p.y + 12, 3, 3, "#f5a044");
+      }
+    }
+  }
+
+  // =========================================================
+  // 11. PALMEIRAS
+  // =========================================================
+
+  function drawPalms() {
+    for (const palm of palms) {
+      const x = palm.x - cameraX;
+
+      if (x < -30 || x > W + 30) continue;
+
+      const s = palm.scale;
+      const baseY = palm.y;
+
+      // Tronco.
+      rect(x, baseY - 27 * s, 4 * s, 27 * s, "#a65b2a");
+      rect(x + 3 * s, baseY - 24 * s, 2 * s, 20 * s, "#d98a36");
+
+      // Folhas geométricas.
+      rect(x - 10 * s, baseY - 31 * s, 12 * s, 3 * s, "#159b45");
+      rect(x - 13 * s, baseY - 34 * s, 7 * s, 3 * s, "#159b45");
+
+      rect(x + 2 * s, baseY - 35 * s, 12 * s, 3 * s, "#159b45");
+      rect(x + 8 * s, baseY - 38 * s, 7 * s, 3 * s, "#159b45");
+
+      rect(x - 4 * s, baseY - 39 * s, 7 * s, 4 * s, "#26c653");
+      rect(x - 8 * s, baseY - 43 * s, 6 * s, 4 * s, "#26c653");
+      rect(x + 1 * s, baseY - 45 * s, 6 * s, 6 * s, "#26c653");
+    }
+  }
+
+  // =========================================================
+  // 12. ANÉIS DOURADOS ANIMADOS
+  // =========================================================
+
+  function drawRings() {
+    for (const ring of rings) {
+      if (ring.taken) continue;
+
+      const x = ring.x - cameraX;
+      if (x < -10 || x > W + 10) continue;
+
+      const pulse = Math.sin(elapsed * 8 + ring.phase);
+      const width = Math.max(2, Math.abs(pulse) * 5);
+
+      // Anel com centro vazado.
+      ctx.strokeStyle = "#fff08a";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(x, ring.y, width, 6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = "#e8a900";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(x, ring.y, width, 6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // =========================================================
+  // 13. SONIC PIXELIZADO
+  // =========================================================
+
+  function drawSonic() {
+    const x = Math.round(player.x - cameraX);
+    const y = Math.round(player.y);
+
+    // Piscar ao reaparecer.
+    if (player.invulnerable > 0 && Math.floor(elapsed * 18) % 2 === 0) {
+      return;
+    }
+
+    ctx.save();
+
+    // Desenho em coordenadas locais.
+    ctx.translate(x + player.w / 2, y + player.h / 2);
+
+    if (player.facing < 0) ctx.scale(-1, 1);
+
+    const moving = Math.abs(player.vx) > 20;
+    const airborne = !player.grounded;
+
+    if (player.rolling || (airborne && moving)) {
+      // Silhueta circular durante o giro.
+      circle(0, 0, 9, "#0055ca");
+      rect(-7, -5, 12, 10, "#1479ff");
+      rect(-8, -2, 13, 5, "#0061db");
+
+      // Espinhos.
+      rect(-8, -8, 6, 5, "#0755cb");
+      rect(-5, -10, 6, 4, "#0755cb");
+      rect(0, -9, 5, 4, "#0755cb");
+
+      // Tênis.
+      rect(3, 4, 8, 4, "#ed2028");
+      rect(5, 7, 7, 2, "#ffffff");
+    } else {
+      // Espinhos traseiros.
+      rect(-8, -7, 5, 6, "#0755cb");
+      rect(-9, -3, 5, 6, "#0755cb");
+      rect(-7, 2, 5, 4, "#0755cb");
+
+      // Corpo.
+      rect(-5, -7, 11, 13, "#0874f9");
+      rect(-3, -9, 9, 8, "#1684ff");
+
+      // Barriga.
+      rect(0, 0, 6, 5, "#f5c49a");
+
+      // Cabeça.
+      rect(-2, -11, 9, 9, "#0874f9");
+
+      // Focinho.
+      rect(3, -5, 7, 4, "#f5c49a");
+      rect(7, -5, 4, 3, "#ffe0b5");
+
+      // Olho.
+      rect(4, -10, 4, 6, "#ffffff");
+      rect(6, -8, 2, 4, "#111111");
+
+      // Nariz.
+      rect(9, -6, 2, 2, "#111111");
+
+      // Braço.
+      rect(4, 0, 4, 5, "#0874f9");
+      rect(5, 4, 5, 3, "#ffffff");
+
+      // Pernas animadas.
+      const step = moving ? Math.sin(player.anim) * 3 : 0;
+
+      rect(-4 + step, 5, 4, 5, "#0874f9");
+      rect(2 - step, 5, 4, 5, "#0874f9");
+
+      // Tênis vermelhos com sola branca.
+      rect(-6 + step, 9, 8, 4, "#ed2028");
+      rect(0 - step, 9, 9, 4, "#ed2028");
+      rect(-6 + step, 12, 8, 2, "#ffffff");
+      rect(0 - step, 12, 9, 2, "#ffffff");
+    }
+
+    ctx.restore();
+  }
+
+  // =========================================================
+  // 14. MOLA E PLACA DE FINAL
+  // =========================================================
+
+  function drawSpring() {
+    const x = spring.x - cameraX;
+    const y = spring.y;
+
+    rect(x, y + 8, 14, 5, "#e32727");
+    rect(x + 2, y + 4, 10, 4, "#ffd735");
+    rect(x + 4, y, 6, 4, "#f5f5f5");
+    rect(x, y + 11, 14, 2, "#7d2020");
+  }
+
+  function drawGoal() {
+    const x = goal.x - cameraX;
+    const y = goal.y;
+
+    rect(x + 7, y, 3, 54, "#d5b67a");
+    rect(x - 3, y, 22, 22, "#eeeeee");
+    rect(x - 1, y + 2, 18, 18, "#f8d62e");
+
+    // Emblema estilizado.
+    circle(x + 8, y + 11, 6, "#1479ff");
+    circle(x + 8, y + 11, 3, "#ffffff");
+
+    if (won) {
+      rect(x - 3, y, 22, 22, "#39df67");
+      circle(x + 8, y + 11, 6, "#1479ff");
+      circle(x + 8, y + 11, 3, "#ffffff");
+    }
+  }
+
+  // =========================================================
+  // 15. HUD CLÁSSICO
+  // =========================================================
+
+  function drawHUD() {
+    text("SCORE", 8, 6, "#ffffff", 8);
+    text(String(score).padStart(6, "0"), 8, 16, "#ffffff", 8);
+
+    text("TIME", 112, 6, "#ffffff", 8);
+
+    const totalSeconds = Math.floor(elapsed);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    text(
+      `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`,
+      112, 16, "#ffffff", 8
+    );
+
+    text("RINGS", 236, 6, "#ffffff", 8);
+    text(String(ringsCollected).padStart(3, "0"), 236, 16, "#ffe34b", 8);
+
+    // Identificação do personagem.
+    rect(8, 30, 10, 9, "#0874f9");
+    rect(11, 32, 5, 3, "#ffffff");
+    text("SONIC", 22, 31, "#ffffff", 7);
+  }
+
+  // =========================================================
+  // 16. PARTÍCULAS E MENSAGENS
+  // =========================================================
+
+  function drawParticles() {
+    for (const p of particles) {
+      rect(
+        p.x - cameraX,
+        p.y,
+        2, 2,
+        p.color
+      );
+    }
+  }
+
+  function drawOverlay(title, subtitle) {
+    rect(44, 62, 232, 50, "#102f7c");
+    rect(47, 65, 226, 44, "#1479ff");
+    rect(50, 68, 220, 38, "#0b347e");
+
+    text(title, 160 - title.length * 3, 77, "#ffe94a", 10);
+    text(subtitle, 160 - subtitle.length * 2.5, 94, "#ffffff", 7);
+  }
+
+  // =========================================================
+  // 17. LOOP PRINCIPAL
+  // =========================================================
+
+  function update(dt) {
+    if (gameOver || won) {
+      updateParticles(dt);
+      return;
+    }
+
+    elapsed += dt;
+
+    updatePlayer(dt);
+    updateCollectibles();
+    updateParticles(dt);
+
+    // Câmera suave com limites do mundo.
+    const targetCamera = player.x - W * 0.38;
+
+    cameraX += (targetCamera - cameraX) * Math.min(1, dt * 6);
+    cameraX = Math.max(0, Math.min(WORLD_WIDTH - W, cameraX));
+  }
+
+  function render() {
+    drawBackground();
+    drawPalms();
+    drawPlatforms();
+    drawRings();
+    drawSpring();
+    drawGoal();
+    drawParticles();
+    drawSonic();
+    drawHUD();
+
+    if (won) {
+      drawOverlay("FASE COMPLETA!", "PRESSIONE R PARA JOGAR");
+    }
+  }
+
+  function frame(timestamp) {
+    if (!previousTime) previousTime = timestamp;
+
+    // Limita o tempo acumulado para evitar saltos após perder o foco.
+    const frameTime = Math.min((timestamp - previousTime) / 1000, 0.05);
+    previousTime = timestamp;
+
+    accumulator += frameTime;
+
+    // Física em passos fixos, independente da taxa de renderização.
+    while (accumulator >= FIXED_DT) {
+      update(FIXED_DT);
+      accumulator -= FIXED_DT;
+    }
+
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // =========================================================
+  // 18. INICIALIZAÇÃO
+  // =========================================================
+
+  resetGame();
+  requestAnimationFrame(frame);
+
+})();
+</script>
+
+</body>
+</html>
